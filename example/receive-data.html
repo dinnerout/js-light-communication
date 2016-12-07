@@ -4,16 +4,16 @@
 		<meta charset="utf-8">
 		<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
 
-		<title>send-data Example</title>
+		<title>receive-data Example</title>
 	</head>
 
-	<body style="background:#000">
+	<body>
 		<script src="../src/lightcom.js"></script>
 		<script>
 			
-			setTimeout( function(){
-				lightcom.sendData('K5o',3);
-			}, 2000 );
+			window.onload = function(){
+				lightcom.receiveData( function(data){ console.info('Result data: ', data); });
+			};
 			
 		</script>
 	</body>
