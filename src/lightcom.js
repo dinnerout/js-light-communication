@@ -12,7 +12,7 @@
  * @uses: tracking.js
  * @author: Sebastian Martens <sm@nonstatics.com>
  * @copyright: Sebastian Martens, 2016
- * @license: Apache
+ * @license: MIT
  * @version: 1.0
  */
 var lightcom = (function () {
@@ -53,6 +53,8 @@ var lightcom = (function () {
 		var _detectTolerance = 0.9; 
 		var _filterTolerance = 0.15;
 		var _screenFillTolerance = 0.10;
+		// defines the number of parity bits
+		var _parityBits = 4;
 		
 		// 
 		var _receiveDataResultHandler;
@@ -184,14 +186,15 @@ var lightcom = (function () {
     	/**
     	 * initialises the "webcam" for reading data
     	 * appends script node and canvas elements 
+    	 * @param {DOM} parentNode Parent DOM node where video and canvas should be attached
     	 */
-    	function _initReadCam(){
+    	function _initReadCam( parentNode ){
     		if( _initStateRead ){
     			console.error('Read already initilised.');
     			return false;
     		}
     		
-    		var bodyNode = document.querySelectorAll('body')[0];
+    		var parentNode = parentNode || document.querySelectorAll('body')[0];
     		var newVideo = document.createElement('video');
     		if( _debug || _showInfo ){
     			var newCanvas = document.createElement('canvas');
@@ -207,19 +210,71 @@ var lightcom = (function () {
 			newVideo.setAttribute('muted','muted');
 			newVideo.setAttribute('height',_videoHeight);
 			newVideo.setAttribute('width',_videoWidth);
-			newVideo.setAttribute('style','width:'+_videoWidth+'px; height:'+_videoHeight+'px; position:absolute; top:0; left:0');
-			bodyNode.appendChild(newVideo);
+			newVideo.setAttribute('style','width:'+_videoWidth+'px; height:'+_videoHeight+'px;position:absolute;');
+			parentNode.appendChild(newVideo);
 			
 			if( _debug || _showInfo ){
 				newCanvas.setAttribute('id','lightcomCanvas');
 				newCanvas.setAttribute('height',_videoHeight);
 				newCanvas.setAttribute('width',_videoWidth);
-				newCanvas.setAttribute('style','width:'+_videoWidth+'px; height:'+_videoHeight+'px; position:absolute; top:0; left:0');
-				bodyNode.appendChild(newCanvas);
+				newCanvas.setAttribute('style','width:'+_videoWidth+'px; height:'+_videoHeight+'px;position:absolute;');
+				parentNode.appendChild(newCanvas);
 			}
 			
 			// set init status
 			_initStateRead = true;
+    	}
+    	
+    	/**
+    	 * returns parity bits for the given data as array structure
+    	 * @param {Array} data Binary data as array list ["1","1","0","1",...]
+    	 * @param {String} dataRaw Raw data string 'hgt65'
+    	 * @return {Array} Parity Bits as array ["1","1","0"] 
+    	 */
+    	function _createParityBits( data, dataRaw ){
+    		result = [];
+    		
+    		// first parity bit is the parity of all "1" in the binary sequence
+    		result.push( (_countString('1',data.join(''))%2) );
+    		// second parity bit is the parity of character length of the original string
+    		result.push( (dataRaw.length%2) );
+			// third parity bit checks parity of the parity bits    		
+    		result.push( (_countString('1',result.join(''))%2) );
+    		
+    		// 
+    		if( _debug ) console.info( 'Parity: ', result.join('') );
+    		
+    		// the length of the total parities is globally defined 
+    		// not used bits will be filled with "1"
+    		return _addOne( result.join(''), _parityBits ).split('');
+    	}
+    	
+    	/**
+    	 * tests if a given data object matches given parity bits
+    	 * @param {String} data Binary data string '1001011101010101'
+    	 * @param {String} parity Parity data to test '0011' ( by parity length = 4 )
+    	 * @return {Boolean} true if parity is verified
+    	 */
+    	function _verifyParityBit( data, parity ){
+    		var parityTest = '';
+    		
+    		// first parity bit is the parity of all "1" in the binary sequence
+    		parityTest += (_countString('1',data)%2);
+    		// second parity bit is the parity of character length of the original string
+    		parityTest += ((data.length/8)%2);
+    		// third parity bit checks parity of the parity bits  
+    		parityTest += (_countString('1',parityTest)%2);
+    		
+    		// the length of the total parities is globally defined 
+    		// not used bits will be filled with "1"
+    		parityTest = _addOne( parityTest, _parityBits );
+    		
+    		if( _debug ){
+      			console.info('Parity expected: ', parity );
+      			console.log('Parity calculated: ', parityTest );
+      		}
+    		
+    		return (parity == parityTest);
     	}
     	
     	/**
@@ -251,17 +306,9 @@ var lightcom = (function () {
     		// convert string data in an array of 0 and 1
     		data = _convertDataToBinary( data );
     		
-    		// adds parity bit add the end of one data chunk 
-    		// to verify the submitted data are correct
-    		parity = '' + (_countString('1',data.join(''))%2) + (_dataIn.length%2);
-    		if( _debug ) console.info( 'Parity: ', parity );
-    		//console.log('Data',data.join(''));
-    		data = data.concat( parity.split('') );
-    		//console.log('Data',data.join(''));
-    		
     		// add marker symbol before and after data chunk to later
     		// identify start and end of transmission
-    		data = _getMarkerBinArray('start').concat( data.concat( _getMarkerBinArray('end') ) );
+    		data = _getMarkerBinArray('start').concat( data.concat( _createParityBits( data, _dataIn ).concat( _getMarkerBinArray('end') ) ) );
     		
     		// 
     		if( _debug ){
@@ -480,9 +527,10 @@ var lightcom = (function () {
 		/**
     	 * handles the receiving of data from a browser webcam
     	 * @param {Function} resultHandler Message complete handler. Complete message will be send to this result handler method
+    	 * @param {DOM} parentNode Parent DOM node where video and canvas should be attached
     	 * @return {Boolean} false, if no result handler is given
     	 */
-    	function _receiveData( resultHandler ){
+    	function _receiveData( resultHandler, parentNode ){
 			if( !resultHandler ){
     			console.warn('No result handler where given to receive data.');	
     			return false;
@@ -490,7 +538,7 @@ var lightcom = (function () {
     		
     		// init relevant web cam / canvas DOM nodes
     		if( !_initStateRead ){
-    			_initReadCam();
+    			_initReadCam( parentNode );
     		}
     		
     		// init new coloe tracker object
@@ -680,18 +728,12 @@ var lightcom = (function () {
 		      		if( _debug ) console.info('End found: ', end);
 		      		
 		      		// extract parity bit, the last bit befor end marker
-		      		parity = data.slice(end-2,end);
+		      		parity = data.slice(end-_parityBits,end);
 		      		// extract the data and remove end marker
-		      		data = data.slice(0,end-2);
-		      		console.info( data );
-		      		if( _debug ){
-		      			console.info('Parity expected: ', parity );
-		      			console.log('Parity calculated: ', ( '' + (_countString('1',data)%2) + ((data.length/8)%2) ) );
-		      		}
+		      		data = data.slice(0,end-_parityBits);
 		      		
 		      		// checks if parity bit 
-		      		if( data.length<8 || 
-		      			parity !== ( '' + (_countString('1',data)%2) + ((data.length/8)%2) ) ){
+		      		if( data.length<8 || !_verifyParityBit( data, parity ) ){
 		      				
 		      			if( _debug ) console.info('Parity Check failed.');
 		      			// _receiveDataList = [];
@@ -790,9 +832,10 @@ var lightcom = (function () {
     		 * receives data over the webcam from data sender, inits webcam instance and adds 
     		 * to webpage DOM
  		     * @param {Function} resultHandler Result handler method to be called when data were successfully transmitted
+ 		     * @param {DOM} parentNode Parent DOM node where video and canvas should be attached
     		 */
-    		receiveData: function( resultHandler ){
-    			return _receiveData( resultHandler );
+    		receiveData: function( resultHandler, parentNode ){
+    			return _receiveData( resultHandler, parentNode );
     		}
  
     	};

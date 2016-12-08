@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+
+		<title>receive-data Example</title>
+		
+		<style>
+			h1{ text-align: center;  }
+			#wrapper{ width:350px; height:250px; margin:auto; background:#00aeef; }
+		</style>
+	</head>
+
+	<body>
+		
+		<h1>Styling example</h1>
+		
+		<!-- wrapper node for video and canvas -->
+		<div id="wrapper"></div>
+		
+		<script src="../src/lightcom.js"></script>
+		<script>
+			
+			// give the receiveData method a second argument that defines the 
+			// parent node for the video and canvas element
+			// with this element the video and canvas node will be positioned absolute
+			window.onload = function(){
+				lightcom.receiveData( function( msg ){ 
+					alert('Result data: ' + msg ); 
+				},document.querySelectorAll('#wrapper')[0]);
+			};
+			
+		</script>
+	</body>
+</html>
