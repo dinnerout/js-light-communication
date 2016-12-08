@@ -1,7 +1,15 @@
 /**
+ * lightcom is a small JS library for sending and submitting small chunks of data from a browser window
+ * or an compatible device to another computer/ browser with enabled webcam.
  * 
- * @author: Sebastian Martens, sm@nonstatics.com
+ * data will be converted into an binary stream and send via a flickering light sequenc.
+ * on the receiving device the flickering will be decoded back into data.
+ * 
+ * @uses: tracking.js
+ * @author: Sebastian Martens <sm@nonstatics.com>
  * @copyright: Sebastian Martens, 2016
+ * @license: Apache
+ * @version: 1.0
  */
 var lightcom = (function () {
 	
@@ -19,24 +27,22 @@ var lightcom = (function () {
     		navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
   		}
   		
-  		// 
-  		var _debug = true;
-  		// overall screen node, full screen container to be black (off) or white (on) 
-  		var _screenNode; 
-  		// current state of the screen on (1) | off (0)
-  		var _screenState; 
-		// default frequency to transmit data
-		var _defaultFrequency = 2;
+  		// set DEBUG state for canvas overlay over video to show color hit regions 
+  		// and for debug console logs
+  		var _debug = false;
+  		// if set to true an information layer will be shown over the video frame, shwoing 
+  		// the current status like "Found start", "Finished"
+  		var _showInfo = true;
+  		
+  		// frequency to transmit data. Higher frequencies need faster computers to do more image detection
+  		// cycles, so lower frequencies are better to be usable on more computers
+		var _defaultFrequency = 4;
 		// default number of repetitions
 		var _defaultRepeat = _defaultFrequency*2;
-		// defined character to mark Start / End of submission
-		// must be 7bit character in ASCII
-		//var _startMarker = "@";
-		var _startMarker = "11110000";
-		var _startMarkerArray = _startMarker.split(''); 
-		// init status 
-		var _initStateScreen=false;
-		var _initStateRead=false;
+		
+		// defined character to mark start / end of submission
+		// must be 8bit character in ASCII
+		var _startMarker = "01110000"; // 
 		
 		// 
 		var _detectTolerance = 0.9; 
@@ -48,10 +54,28 @@ var lightcom = (function () {
 		var _receiveData;
 		var _receiveState;
 		
+		// height and width of the video frame. a small frame is ok, larger frames need more computing power
+		// for faster and more precise analyses a small video frame is ok.
 		var _videoWidth = 300;
 		var _videoHeight = 225;
 		
+		// state if the frame analysis is currently running
+		// the ColorTracking will run all the time, if this is false, the data will not 
+		// collected and analysed for signals
 		var _running = false;
+		
+		// overall screen node, full screen container to be black (off) or white (on) 
+  		var _screenNode; 
+  		// current state of the screen on (1) | off (0)
+  		var _screenState; 
+		
+		// init states for display or reading
+		var _initStateScreen=false;
+		var _initStateRead=false;
+		
+		// DOM node of canvas overlay 
+		var _overlayNode;
+		var _overlayInfoStatus = {};
 
 		/**
 		 * switches the states of the main screen
@@ -81,21 +105,27 @@ var lightcom = (function () {
 			_switchScreen( false );
 		}
 		
+		/**
+		 * starts the execution of tracking loop
+		 */
 		function _run(){
 			_running = true;
 		}
 		
+		/**
+		 * pauses the execution of tracking loop
+		 * color tracking will continue, analysing data is paused
+		 */
 		function _pause(){
 			_running = false;
 		}
 		
 		/**
-		 * 
+		 * adds external libraries to the DOM
 		 */
 		function _initLibrary(){
 			var bodyNode = document.querySelectorAll('body')[0];
     		var newScript = document.createElement('script');
-    		
     		var dir,name;	
     		
     		// append script node for tracking.js
@@ -147,8 +177,9 @@ var lightcom = (function () {
     		
     		var bodyNode = document.querySelectorAll('body')[0];
     		var newVideo = document.createElement('video');
-    		if( _debug ){
+    		if( _debug || _showInfo ){
     			var newCanvas = document.createElement('canvas');
+    			_overlayNode = newCanvas; 
     		}
     		
 			// 
@@ -163,7 +194,7 @@ var lightcom = (function () {
 			newVideo.setAttribute('style','width:'+_videoWidth+'px; height:'+_videoHeight+'px; position:absolute; top:0; left:0');
 			bodyNode.appendChild(newVideo);
 			
-			if( _debug ){
+			if( _debug || _showInfo ){
 				newCanvas.setAttribute('id','lightcomCanvas');
 				newCanvas.setAttribute('height',_videoHeight);
 				newCanvas.setAttribute('width',_videoWidth);
@@ -179,6 +210,7 @@ var lightcom = (function () {
 		 * starts sending data, data must be string value 
 		 * @param {String} data The String which should be send, only A-Z and 0-9 allowed
 		 * @param {Integer} repeat The number of times the sending should be repeated
+		 * @return {Boolean} returns false if parameters are wrong
 		 */
     	function _sendData( data, repeat ){
     		if( !data ){
@@ -199,7 +231,6 @@ var lightcom = (function () {
     		// TODO: make this unneccessary and support all characters
     		data = _checkDataChars( data );
     		repeat = repeat || _defaultRepeat;
-    		// frequency = frequency || _defaultFrequency;
     		
     		// convert string data in an array of 0 and 1
     		data = _convertDataToBinary( data );
@@ -207,14 +238,19 @@ var lightcom = (function () {
     		// add marker symbol before and after data chunk to later
     		// identify start and end of transmission
     		data = _getMarkerBinArray().concat( data.concat( _getMarkerBinArray() ) );
-    		console.log("Data: ", "'"+_dataIn+"'", "Submit characters: ", data.length/8, " -- ", data.length, "bit" );
-    		console.log("Sending: ", data.join(''));
+    		if( _debug ){
+    			console.log("Data: ", "'"+_dataIn+"'", "Submit characters: ", data.length/8, " -- ", data.length, "bit" );
+    			console.log("Sending: ", data.join(''));
+    		}
     		
     		// start screen transmission
     		_printDataToScreen( data, repeat );
     		
     		// switch off screen when finished
     		_switchOff();
+    		
+    		// 
+    		return true;
     	}
     	
     	/**
@@ -222,15 +258,7 @@ var lightcom = (function () {
     	 * @return {Array} the binary array of start/ end marker
     	 */
     	function _getMarkerBinArray(){
-    		/*
-    		var result = _dec2bin( _startMarker.charCodeAt(0) ).split('');
-    		if( result.length !== 7 ){
-    			console.error('Illegal start/ stop marker character');
-    			return false;
-    		}
-    		return result;
-    		*/
-    		return _startMarkerArray;
+    		return _startMarker.split('');
     	}
     	
     	/**
@@ -257,6 +285,19 @@ var lightcom = (function () {
     	function _dec2bin8( dec ){
     		return _addZero( (dec >>> 0).toString(2), 8 );
 		}
+		
+		/**
+		 * converts an ASCII string of binary data ('10011000') back
+		 * into readable string
+		 * @param {String} bin Binary 8bit ASCII string, e.g. '10011000'
+		 * @return {String} ASCII text
+		 */
+		function _bin2dec8( bin ){
+			// converts only 8bit characters
+			if( bin.length != 8 ) return false;
+			
+			return String.fromCharCode( parseInt(bin, 2) ); 
+		}
     	
     	/**
     	 * converts a data string into an array of 1 and 0
@@ -277,7 +318,7 @@ var lightcom = (function () {
     	 * starts printing the data set to screen
     	 * uses internal recursion helper for the frequency
     	 * @param {Array} binaryData Array of "1" | "0", representing the binary values of the current data
-    	 * @param {Integer}
+    	 * @param {Integer} cycles Number of repeatitions for sending the data
     	 */
     	function _printDataToScreen( binaryData, cycles ){
     		if( !binaryData || binaryData.length<1 ){
@@ -310,14 +351,14 @@ var lightcom = (function () {
     		// if not the last value start timer for printing next value
     		if( index < (data.length-1) ){
 	    		setTimeout(function(){
-	    			_printDataToScreenHelper( data, ++index, repeat, repeatIndex );
+	    			_printDataToScreenHelper( data,index+1, repeat, repeatIndex );
 	    		}, (1000/_defaultFrequency) );
 	    	
 	    	// if run should be repeated start next here
 	    	}else if(repeatIndex < repeat){
 	    		setTimeout(function(){
 	    			console.info('Repeat: ', repeatIndex);
-	    			_printDataToScreenHelper( data, 0, repeat, ++repeatIndex );
+	    			_printDataToScreenHelper( data, 0, repeat, repeatIndex+1 );
 	    		}, (1000/_defaultFrequency) );
 	    	}
     		
@@ -333,31 +374,34 @@ var lightcom = (function () {
     		return _fillAddValue(x,n,'0');
 		}
 		
+		/**
+    	 * fills a string or number with ones in front
+    	 * @param {String|Integer} x Value to fill with zeros in front
+    	 * @param {Integer} n Number of resulting digits
+    	 * @param {String} valued filled up with zeros in front to number of given digits
+    	 */
 		function _addOne(x,n) {
     		return _fillAddValue(x,n,'1');
 		}
 		
+		/**
+    	 * fills a string or number with given character in front
+    	 * @param {String|Integer} x Value to fill with zeros in front
+    	 * @param {Integer} n Number of resulting digits
+    	 * @param {String} v Character-Value to fill in front of given string
+    	 * @param {String} valued filled up with zeros in front to number of given digits
+    	 */
 		function _fillAddValue(x,n,v) {
     		while (x.toString().length < n) {
         		x = ''+ v + x;
     		}
     		return x;
 		}
-		
-		/**
-		 * 
-		 */
-		function _getSecTimestamp(){
-			var d = new Date();
-    		
-    		return  '' + _addZero(d.getHours(), 2) + '.' + 
-    					 _addZero(d.getMinutes(), 2) + '.' + 
-    					 _addZero(d.getSeconds(), 2) + '.' + 
-    					 Math.min( Math.floor( (1000/_defaultFrequency) / d.getMilliseconds() ), (_defaultFrequency-1) );
-		}
     	
     	/**
-    	 * 
+    	 * returns the current timestamp of hour, minute, second and millisecond
+    	 * filled up to 2/3 digits 
+    	 * @return {String} current timestamp with milliseconds
     	 */
     	function _getSecTime() {
     		var d = new Date();
@@ -369,7 +413,8 @@ var lightcom = (function () {
 		}
 		
 		/**
-		 * 
+		 * initialises the color tracking for the video element in DOM
+		 * @return {Tracker} the tracker instance
 		 */
 		function _initColorTracker(){
 			// 
@@ -393,61 +438,9 @@ var lightcom = (function () {
 		}
 		
 		/**
-		 * 
-		 */
-		function _trackColorResultHandler( trackEvent ){
-			// get current time 
-			var t = _getSecTime();
-			var rect,item;
-			
-			if( _debug ){
-    			var canvas = document.getElementById('lightcomCanvas');
-  				var context = canvas.getContext('2d');
-  		
-    			context.clearRect(0, 0, canvas.width, canvas.height);
-			}
-			
-			// 
-			// _receiveData.push({'t':t,'c':b});
-			
-			// handle event data only if color matches were found			
-			if( trackEvent.data.length ){
-      			
-				// return will be a list of result rectangles which hit 
-				// the color match. handle each returned result rectangle
-				for( item in trackEvent.data ){
-					rect = trackEvent.data[ item ];
-		        	
-		        	// in debug state show all rectangles of found color 
-	      			// areas in overlaying canvas
-	        		if( _debug ){
-	        			if (rect.color === 'custom') {
-				        	rect.color = tracker.customColor;
-				        }
-				
-						context.strokeStyle = rect.color;
-						context.strokeRect(rect.x, rect.y, rect.width, rect.height);
-						context.font = '11px';
-						context.fillStyle = "#fff";
-						context.fillText('x: ' + rect.x + 'px', rect.x + rect.width + 5, rect.y + 11);
-						context.fillText('y: ' + rect.y + 'px', rect.x + rect.width + 5, rect.y + 22);
-					}
-					
-					// check if the size of the result rectangle is at least XY% (_screenFillTolerance) of the screensize
-		        	if( (rect.width*rect.height) > (_videoWidth*_videoHeight*_screenFillTolerance) ){
-		        		// console.info( rect );
-		        		_receiveData.push( t );
-		        		return true;
-		        	}
-		        };
-		        
-			}
-			
-			return false;
-		}
-    	
-    	/**
-    	 * 
+    	 * handles the receiving of data from a browser webcam
+    	 * @param {Function} resultHandler Message complete handler. Complete message will be send to this result handler method
+    	 * @return {Boolean} false, if no result handler is given
     	 */
     	function _receiveData( resultHandler ){
 			if( !resultHandler ){
@@ -466,70 +459,196 @@ var lightcom = (function () {
 			_receiveDataResultHandler = resultHandler;
 			_receiveData = [];
 			
-			// 
+			// starts the processing of detected colors when received
 			_run();
 			
 			// attach event handler on track event of color tracker
 			// executes on each color tracking event
       		tracker.on('track', function( event ){
+
+      			// when color tracking hits should be processed currently
       			if( _running ){
+
+      				// analyse of detected data will only be done if color matches 
+      				// were successfully detected
 	      			if( _trackColorResultHandler( event ) ){
-						// analyse data 
-		      			var message = _analyseMessage();
+						// data coming in
+						_overlayInfoStatus.receiving = true;
+						if( _showInfo && !_debug ) _clearOverlay();
+						
+						// analyse received data and convert into binary string 
+		      			var message = _analyseMessage( _receiveData );
+		      			// when message received a start and end was found and data 
+		      			// was decoded. call result handler and stopp further analysis
 		      			if( message ){
+		      				// give data to result handler
 		      				_receiveDataResultHandler( message );
+		      				// pause image analysing
 		      				_pause();
+							
+							// update Info overlay		      				
+		      				_overlayInfoStatus.complete = message;
+							_overlayInfoStatus.bitCount = null;
+							_overlayInfoStatus.start = false;
+							_overlayInfoStatus.receiving = false;
+		      				_clearOverlay();
 		      			}
+		      			
 	      			}
+	      			
 	      		}
+	      		
       		});
-    		
     	}
     	
     	/**
     	 * 
     	 */
-    	function _analyseMessage(){
-    		console.clear();
-    		res = false;
+    	function _clearOverlay(){
+  			var context = _overlayNode.getContext('2d');
+    		context.clearRect(0, 0, _overlayNode.width, _overlayNode.height);
+    		
+    		if( _showInfo ) _showOverlayInfo();
+    	}
+    	
+		/**
+		 * handles each detection event of the color detection
+		 * fills a global array to timestamps when colors where detected. This array will later be analysed for 
+		 * how long each color was detected to how many bits where transmitted
+		 * @param {Object} trackEvent Color Tracking event with object list of all detected colors
+		 * @return {Boolean} true if color was detected and data potentially send
+		 */
+		function _trackColorResultHandler( trackEvent ){
+			// get current timestamp
+			var t = _getSecTime();
+			var rect,item;
+			
+			if( _debug ){
+    			_clearOverlay();
+			}
+			
+			// handle event data only if color matches were found			
+			if( trackEvent.data.length ){
+
+				if( _debug ) var context = _overlayNode.getContext('2d');
+      			
+				// return will be a list of result rectangles which hit 
+				// the color match. handle each returned result rectangle
+				for( item in trackEvent.data ){
+					rect = trackEvent.data[ item ];
+		        	
+		        	// in debug state show all rectangles of found color 
+	      			// areas in overlaying canvas
+	        		if( _debug ){
+						context.strokeStyle = rect.color;
+						context.strokeRect(rect.x, rect.y, rect.width, rect.height);
+						context.font = '11px';
+						context.fillStyle = "#fff";
+						context.fillText('x: ' + rect.x + 'px', rect.x + rect.width + 5, rect.y + 11);
+						context.fillText('y: ' + rect.y + 'px', rect.x + rect.width + 5, rect.y + 22);
+					}
+					
+					// check if the size of the result rectangle is at least XY% (_screenFillTolerance) of the screensize
+		        	if( (rect.width*rect.height) > (_videoWidth*_videoHeight*_screenFillTolerance) ){
+		        		// console.info( rect );
+		        		// color match found, timestamp with COLOR
+		        		_receiveData.push({'t':t,'c':'c'});
+		        		return true;
+		        		
+		        	}else{
+		        		// no large enough color match found, timestamp with BLACK
+		        		_receiveData.push({'t':t,'c':'b'});
+		        	}
+		        	
+		        };
+		    
+			}else{
+				// no color match found, timestamp with BLACK
+				_receiveData.push({'t':t,'c':'b'});
+			}
+			
+			return false;
+		}
+		
+		/**
+		 * shows 
+		 */
+		function _showOverlayInfo(){
+			var context = _overlayNode.getContext('2d');
+			
+			context.font = '12px';
+			context.fillStyle = "#fff";
+			
+			
+			if( _overlayInfoStatus.complete ){
+				context.fillText('Message complete: ' + _overlayInfoStatus.complete, 5, _overlayNode.height-10 );
+			}
+			if( _overlayInfoStatus.bitCount ){
+				context.fillText('Received ' + _overlayInfoStatus.bitCount + 'bit', 5, _overlayNode.height-40 );
+			}
+			if( _overlayInfoStatus.start ){
+				context.fillText('Start found', 5, _overlayNode.height-25 );
+			}
+			if( _overlayInfoStatus.receiving ){
+				context.fillText('Receiving data', 5, _overlayNode.height-10 );
+			}
+					
+		}
+    	
+    	/**
+    	 * analyses the incoming data
+    	 * incoming data are a list of timestamps mapped to detected colors
+    	 * color might be black (b) for nothing detected at that moment and cyan (c) the 
+    	 * bit color, which represents one or more bits. 
+    	 * @param {Array} data Data array of color detection timestamps
+    	 * @param {Boolean} true if message were successfully decoded, false if message is not complete
+    	 */
+    	function _analyseMessage( data ){
+    		// 
+    		var result = false;
     		
 			// converts the captured raw data into binary array
-			var received = _filterData(_receiveData);
+			var received = _filterData( data );
 			
-			console.log( "Should--: ", '1111000001001011001101010110111111110000' );
-			console.log( "Received: ", received );
-			
+			// show received data
+			if( _debug ){
+				console.clear();
+				console.log( "Received: ", received );
+			}
 			
 			// looking for start marker in raw data
-	      	var start = received.indexOf(_startMarker);
+	      	var start = received.indexOf( _startMarker );
+	      	// if start marker is existing looking for end marker
 	      	if( start > -1 ){
+	      		if( _debug ) console.info('Start marker found: ', start);
+	      		_overlayInfoStatus.start = true;
+	      		_overlayInfoStatus.bitCount = Math.floor(received.length/8);
 	      		
+	      		// cut off start merker sequence
 	      		var pop,end,data=received.slice(start+8,received.length);
-	      		end = data.indexOf(_startMarker);
+	      		// looking for the end marker within the remaining data set
+	      		end = data.indexOf( _startMarker );
 	      		
-	      		console.info('Start found: ', start);
+	      		
 	      		if( end > -1 ){
-		      		console.info('End found: ', end);
+		      		if( _debug ) console.info('End found: ', end);
 		      		
-		      		_receiveData = [];
+		      		_receiveData = ["0"];
 		      		
 		      		data = data.slice(0,data.length-8);
-		      		res = '';
+		      		result = '';
 		      		
 		      		while( data.length >= 8 ){
 		      			pop = data.slice(0,8);
 		      			data = data.slice(8,data.length);
 		      			
-		      			res = res + String.fromCharCode( parseInt(pop, 2) );
+		      			result = result + _bin2dec8( pop );
 		      		}
+		      		
 	      		}
-	      		
-	      		// console.info(received.slice(start,start+8));
-	      		//while(i<received)
-	      		//console.log( String.fromCharCode( ));
 	      	}
 	      	
-	      	return res;
+	      	return result;
     	}
     	
     	/**
@@ -539,61 +658,39 @@ var lightcom = (function () {
     	 * @return 
     	 */
     	function _filterData( data ){
-    		var d,i=1,ii=0,result,cv,tD=((1000/_defaultFrequency));
+			// filter data must be given     		
+    		if( !data || !data.length ) return false;
     		
-    		// init result with '10' because the first bit switch will not be 
-    		// within the regular frequency time frame
-    		result = '1'; 
+    		var i=0,tD=((1000/_defaultFrequency));
     		
     		//console.clear();
+    		var state = data[0];
+    		var result = [];
+    		var returnStr = '';
+    		var obj;
     		
     		//
-    		while(i<_receiveData.length){
+    		while(i<data.length){
     			
-    			if( _receiveData[i]-_receiveData[i-1] >= tD ){
+    			if( data[i].c != state.c ){
     				
-    				cv = (_receiveData[i-1]-_receiveData[ii])/(1000/_defaultFrequency);
-    				//result = result + _addOne('',cv<1?1:Math.floor(cv));
-    				result = result + _addOne('',Math.round(cv));
+    				obj = {
+    					's': state.t,
+    					'e': data[(i-1)].t,
+    					'd': ( data[(i-1)].t - state.t ),
+    					'v': state.c
+    				};
     				
-    				cv = (_receiveData[i]-_receiveData[i-1])/(1000/_defaultFrequency);
-    				//result = result + _addZero('',cv<1?1:Math.floor(cv));
-    				result = result + _addZero('',Math.round(cv));
+    				// result.push( obj );
     				
-    				
-    				/*
-    				console.info({
-    					's':_receiveData[ii],
-    					'e':_receiveData[i-1],
-    					'c':'c', // -- 1
-    					'd': (_receiveData[i-1]-_receiveData[ii])
-    				});
-    				// console.log( ">1<", cv<1?1:Math.floor(cv) );
-    				*/
-    				cv = Math.round( (_receiveData[i-1]-_receiveData[ii])/(1000/_defaultFrequency) );
-    				console.log(">>1", "d:", (_receiveData[i-1]-_receiveData[ii]),(_receiveData[i-1]-_receiveData[ii])/(1000/_defaultFrequency), "ct:", cv );
-    				
-    				if( (_receiveData[i]-_receiveData[i-1]) > 40000 ){
-    					console.error('Time error happend.');
-    					_receiveData = [];
-    					
-	    				console.info({
-	    					's':_receiveData[i-1],
-	    					'e':_receiveData[i],
-	    					'c':'s', // -- 0
-	    					'd': (_receiveData[i]-_receiveData[i-1])
-	    				});
-    				}
-    				cv = Math.round( (_receiveData[i]-_receiveData[i-1])/(1000/_defaultFrequency) );
-    				console.log(">>0", "d:",  (_receiveData[i]-_receiveData[i-1]),(_receiveData[i]-_receiveData[i-1])/(1000/_defaultFrequency), "ct:", cv );
-    				
-    				ii = i;
+    				state = data[i];
+    				returnStr = returnStr + _fillAddValue( '', Math.round( obj.d / tD ), obj.v=='b'?'0':'1' );
     			}
     			
     			i++;
     		}
     		
-    		return result;
+    		return returnStr;
     	}
     	
     	// 
@@ -613,8 +710,9 @@ var lightcom = (function () {
     		
     		
     		/**
-    		 * 
- 		     * @param {Function} resultHandler
+    		 * receives data over the webcam from data sender, inits webcam instance and adds 
+    		 * to webpage DOM
+ 		     * @param {Function} resultHandler Result handler method to be called when data were successfully transmitted
     		 */
     		receiveData: function( resultHandler ){
     			return _receiveData( resultHandler );
