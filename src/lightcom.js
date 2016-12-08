@@ -40,14 +40,14 @@ var lightcom = (function () {
   		
   		// frequency to transmit data. Higher frequencies need faster computers to do more image detection
   		// cycles, so lower frequencies are better to be usable on more computers
-		var _defaultFrequency = 4;
+		var _defaultFrequency = 3;
 		// default number of repetitions
 		var _defaultRepeat = _defaultFrequency*2;
 		
 		// defined character to mark start / end of submission
 		// must be 8bit character in ASCII
 		var _startMarker = "011111111101";
-		var _endMarker = "100000000010"; 
+		var _endMarker = "0010000000010"; 
 		
 		// 
 		var _detectTolerance = 0.9; 
@@ -254,8 +254,10 @@ var lightcom = (function () {
     		// adds parity bit add the end of one data chunk 
     		// to verify the submitted data are correct
     		parity = '' + (_countString('1',data.join(''))%2) + (_dataIn.length%2);
-    		data = data.concat( parity.slice('') );
     		if( _debug ) console.info( 'Parity: ', parity );
+    		//console.log('Data',data.join(''));
+    		data = data.concat( parity.split('') );
+    		//console.log('Data',data.join(''));
     		
     		// add marker symbol before and after data chunk to later
     		// identify start and end of transmission
@@ -371,6 +373,19 @@ var lightcom = (function () {
     			_switchOn();
     		}else{
     			_switchOff();
+    		}
+    		
+    		// 
+    		if( _debug && _screenNode ){
+    			var content,tmp;
+    			
+    			content = '<span style="color:'+((data[ index ]=="1")?'#000':'#fff')+'">' + data.join('') + '<br />';
+    			tmp = data.slice(0,index);
+    			content = content + tmp.join('')+'<span style="color:red;">'+data[index]+'</span>';
+    			tmp = data.slice(index+1,data.length);
+    			content = content + tmp.join('') + '</span>';
+    			
+    			_screenNode.innerHTML = content;
     		}
     		
     		// if not the last value start timer for printing next value
@@ -646,7 +661,7 @@ var lightcom = (function () {
 			}
 			
 			// looking for start marker in raw data
-	      	var start = received.indexOf( _startMarker );
+	      	var start = received.lastIndexOf( _startMarker );
 	      	// if start marker is existing looking for end marker
 	      	if( start > -1 ){
 	      		if( _debug ) console.info('Start marker found: ', start);
@@ -654,7 +669,7 @@ var lightcom = (function () {
 	      		// cut off start merker sequence
 	      		var parity,pop,end,data=received.slice(start+_startMarker.length,received.length);
 	      		// looking for the end marker within the remaining data set
-	      		end = data.indexOf( _endMarker );
+	      		end = data.lastIndexOf( _endMarker );
 	      		
 	      		// number of transmitted bits from start
 	      		_overlayInfoStatus.bitCount = Math.floor((data.length)/8);
@@ -665,17 +680,23 @@ var lightcom = (function () {
 		      		if( _debug ) console.info('End found: ', end);
 		      		
 		      		// extract parity bit, the last bit befor end marker
-		      		parity = data.slice(data.length-_endMarker.length-2,data.length-_endMarker.length);
+		      		parity = data.slice(end-2,end);
 		      		// extract the data and remove end marker
-		      		data = data.slice(0,data.length-_endMarker.length-2);
+		      		data = data.slice(0,end-2);
+		      		console.info( data );
+		      		if( _debug ){
+		      			console.info('Parity expected: ', parity );
+		      			console.log('Parity calculated: ', ( '' + (_countString('1',data)%2) + ((data.length/8)%2) ) );
+		      		}
 		      		
 		      		// checks if parity bit 
 		      		if( data.length<8 || 
 		      			parity !== ( '' + (_countString('1',data)%2) + ((data.length/8)%2) ) ){
 		      				
 		      			if( _debug ) console.info('Parity Check failed.');
-		      			_receiveDataList = [];
+		      			// _receiveDataList = [];
 		      			return false;
+		      			
 		      		}else if( _debug ) console.info('Parity Check VERIFIED.');
 		      		
 		      		result = '';
@@ -714,7 +735,7 @@ var lightcom = (function () {
     		var i=0,tD=(1000/_defaultFrequency);
     		var state = data[0];
     		var result = [];
-    		var returnStr = '';
+    		var returnStr = '000';
     		var obj;
     		
     		// go over list of saved timestamp objects 
