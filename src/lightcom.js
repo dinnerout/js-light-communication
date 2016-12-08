@@ -5,6 +5,10 @@
  * data will be converted into an binary stream and send via a flickering light sequenc.
  * on the receiving device the flickering will be decoded back into data.
  * 
+ * Data structure of sended data is:
+ * (8bit StartMarker),(8bit DataElement),(2bit Paritybit),(8bit StartMarker)
+ * the parity bit covers all data elements
+ * 
  * @uses: tracking.js
  * @author: Sebastian Martens <sm@nonstatics.com>
  * @copyright: Sebastian Martens, 2016
@@ -29,7 +33,7 @@ var lightcom = (function () {
   		
   		// set DEBUG state for canvas overlay over video to show color hit regions 
   		// and for debug console logs
-  		var _debug = false;
+  		var _debug = true;
   		// if set to true an information layer will be shown over the video frame, shwoing 
   		// the current status like "Found start", "Finished"
   		var _showInfo = true;
@@ -42,7 +46,8 @@ var lightcom = (function () {
 		
 		// defined character to mark start / end of submission
 		// must be 8bit character in ASCII
-		var _startMarker = "01110000"; // 
+		var _startMarker = "011111111101";
+		var _endMarker = "100000000010"; 
 		
 		// 
 		var _detectTolerance = 0.9; 
@@ -51,7 +56,7 @@ var lightcom = (function () {
 		
 		// 
 		var _receiveDataResultHandler;
-		var _receiveData;
+		var _receiveDataList;
 		var _receiveState;
 		
 		// height and width of the video frame. a small frame is ok, larger frames need more computing power
@@ -118,6 +123,17 @@ var lightcom = (function () {
 		 */
 		function _pause(){
 			_running = false;
+		}
+		
+		/**
+		 * searches the number of occurances of needle in haystack
+		 * @param {String} needle String to search for
+		 * @param {String} haystack String to search in 
+		 * @return {Integer} number of found items
+		 */
+		function _countString( needle, haystack ){
+			if( !needle || !haystack ) return 0;
+			return (haystack.match(new RegExp(needle, "g")) || []).length;
 		}
 		
 		/**
@@ -219,7 +235,7 @@ var lightcom = (function () {
     		}
     		
     		// copy of incoming data
-    		var _dataIn = data;
+    		var parity,_dataIn = data;
     		
     		// initilise if not done
     		if( !_initStateScreen ){
@@ -235,11 +251,19 @@ var lightcom = (function () {
     		// convert string data in an array of 0 and 1
     		data = _convertDataToBinary( data );
     		
+    		// adds parity bit add the end of one data chunk 
+    		// to verify the submitted data are correct
+    		parity = '' + (_countString('1',data.join(''))%2) + (_dataIn.length%2);
+    		data = data.concat( parity.slice('') );
+    		if( _debug ) console.info( 'Parity: ', parity );
+    		
     		// add marker symbol before and after data chunk to later
     		// identify start and end of transmission
-    		data = _getMarkerBinArray().concat( data.concat( _getMarkerBinArray() ) );
+    		data = _getMarkerBinArray('start').concat( data.concat( _getMarkerBinArray('end') ) );
+    		
+    		// 
     		if( _debug ){
-    			console.log("Data: ", "'"+_dataIn+"'", "Submit characters: ", data.length/8, " -- ", data.length, "bit" );
+    			console.log("Data: ", "'"+_dataIn+"'", "Submit characters: ", (data.length-1)/8, " -- ", data.length, "bit" );
     			console.log("Sending: ", data.join(''));
     		}
     		
@@ -255,10 +279,11 @@ var lightcom = (function () {
     	
     	/**
     	 * returns the binary array of start/ end marker
+    	 * @param {String} type Type of marker, either 'start'|'end'
     	 * @return {Array} the binary array of start/ end marker
     	 */
-    	function _getMarkerBinArray(){
-    		return _startMarker.split('');
+    	function _getMarkerBinArray( type ){
+    		return type==='start'?_startMarker.split(''):_endMarker.split('');
     	}
     	
     	/**
@@ -457,7 +482,7 @@ var lightcom = (function () {
     		var tracker = _initColorTracker();
     		// assignes the receiving data event handler
 			_receiveDataResultHandler = resultHandler;
-			_receiveData = [];
+			_receiveDataList = [];
 			
 			// starts the processing of detected colors when received
 			_run();
@@ -477,7 +502,7 @@ var lightcom = (function () {
 						if( _showInfo && !_debug ) _clearOverlay();
 						
 						// analyse received data and convert into binary string 
-		      			var message = _analyseMessage( _receiveData );
+		      			var message = _analyseMessage( _receiveDataList );
 		      			// when message received a start and end was found and data 
 		      			// was decoded. call result handler and stopp further analysis
 		      			if( message ){
@@ -502,9 +527,12 @@ var lightcom = (function () {
     	}
     	
     	/**
-    	 * 
+    	 * clears the current overlay canvas if existing
+    	 * and starts drawing of overlay informations if needed
     	 */
     	function _clearOverlay(){
+    		if( !_overlayNode ) return false;
+    		
   			var context = _overlayNode.getContext('2d');
     		context.clearRect(0, 0, _overlayNode.width, _overlayNode.height);
     		
@@ -523,9 +551,7 @@ var lightcom = (function () {
 			var t = _getSecTime();
 			var rect,item;
 			
-			if( _debug ){
-    			_clearOverlay();
-			}
+			if( _debug ) _clearOverlay();
 			
 			// handle event data only if color matches were found			
 			if( trackEvent.data.length ){
@@ -552,26 +578,27 @@ var lightcom = (function () {
 		        	if( (rect.width*rect.height) > (_videoWidth*_videoHeight*_screenFillTolerance) ){
 		        		// console.info( rect );
 		        		// color match found, timestamp with COLOR
-		        		_receiveData.push({'t':t,'c':'c'});
+		        		_receiveDataList.push({'t':t,'c':'c'});
 		        		return true;
 		        		
 		        	}else{
 		        		// no large enough color match found, timestamp with BLACK
-		        		_receiveData.push({'t':t,'c':'b'});
+		        		_receiveDataList.push({'t':t,'c':'b'});
 		        	}
 		        	
 		        };
 		    
 			}else{
 				// no color match found, timestamp with BLACK
-				_receiveData.push({'t':t,'c':'b'});
+				_receiveDataList.push({'t':t,'c':'b'});
 			}
 			
 			return false;
 		}
 		
 		/**
-		 * shows 
+		 * shows overlay information over video frame like message complete,
+		 * amount of received data and start marker found
 		 */
 		function _showOverlayInfo(){
 			var context = _overlayNode.getContext('2d');
@@ -588,13 +615,15 @@ var lightcom = (function () {
 			}
 			if( _overlayInfoStatus.start ){
 				context.fillText('Start found', 5, _overlayNode.height-25 );
+			}else if(!_overlayInfoStatus.complete){
+				context.fillText('Searching for start ... ', 5, _overlayNode.height-25 );
 			}
 			if( _overlayInfoStatus.receiving ){
 				context.fillText('Receiving data', 5, _overlayNode.height-10 );
 			}
 					
 		}
-    	
+		
     	/**
     	 * analyses the incoming data
     	 * incoming data are a list of timestamps mapped to detected colors
@@ -621,23 +650,39 @@ var lightcom = (function () {
 	      	// if start marker is existing looking for end marker
 	      	if( start > -1 ){
 	      		if( _debug ) console.info('Start marker found: ', start);
-	      		_overlayInfoStatus.start = true;
-	      		_overlayInfoStatus.bitCount = Math.floor(received.length/8);
-	      		
+
 	      		// cut off start merker sequence
-	      		var pop,end,data=received.slice(start+8,received.length);
+	      		var parity,pop,end,data=received.slice(start+_startMarker.length,received.length);
 	      		// looking for the end marker within the remaining data set
-	      		end = data.indexOf( _startMarker );
+	      		end = data.indexOf( _endMarker );
 	      		
+	      		// number of transmitted bits from start
+	      		_overlayInfoStatus.bitCount = Math.floor((data.length)/8);
+	      		_overlayInfoStatus.start = true;
 	      		
+	      		// if start marker is found again -> end marker
 	      		if( end > -1 ){
 		      		if( _debug ) console.info('End found: ', end);
 		      		
-		      		_receiveData = ["0"];
+		      		// extract parity bit, the last bit befor end marker
+		      		parity = data.slice(data.length-_endMarker.length-2,data.length-_endMarker.length);
+		      		// extract the data and remove end marker
+		      		data = data.slice(0,data.length-_endMarker.length-2);
 		      		
-		      		data = data.slice(0,data.length-8);
+		      		// checks if parity bit 
+		      		if( data.length<8 || 
+		      			parity !== ( '' + (_countString('1',data)%2) + ((data.length/8)%2) ) ){
+		      				
+		      			if( _debug ) console.info('Parity Check failed.');
+		      			_receiveDataList = [];
+		      			return false;
+		      		}else if( _debug ) console.info('Parity Check VERIFIED.');
+		      		
 		      		result = '';
 		      		
+		      		// chunk received data into 8 characters parts - 8bit per 
+		      		// submitted character - and translate back from binary into
+		      		// ASCII characters
 		      		while( data.length >= 8 ){
 		      			pop = data.slice(0,8);
 		      			data = data.slice(8,data.length);
@@ -652,26 +697,31 @@ var lightcom = (function () {
     	}
     	
     	/**
-    	 * each color tracking will be stored as one list of timestamps
+    	 * each time a color is tracked it will be stored in a list of hits
+    	 * this method filters this list of hits and filters the bit switches 
+    	 * between black (nothing detected = 0) and cyan (color detected = 1)
     	 * 
-    	 * @param 
-    	 * @return 
+    	 * TODO: optimize performance, once a part of the raw data list is processed 
+    	 * 		 remove this data from raw list and only safe optimized list
+    	 * 
+    	 * @param {Array} data List of timestamps with color detections
+    	 * @return {String} filtered string of 1 and 0 as a list of transmitted binary values
     	 */
     	function _filterData( data ){
 			// filter data must be given     		
     		if( !data || !data.length ) return false;
     		
-    		var i=0,tD=((1000/_defaultFrequency));
-    		
-    		//console.clear();
+    		var i=0,tD=(1000/_defaultFrequency);
     		var state = data[0];
     		var result = [];
     		var returnStr = '';
     		var obj;
     		
-    		//
+    		// go over list of saved timestamp objects 
     		while(i<data.length){
     			
+    			// only if the state between nothing detected (=black) and 
+    			// color detected (=cyan) changes, process as value change
     			if( data[i].c != state.c ){
     				
     				obj = {
@@ -681,9 +731,13 @@ var lightcom = (function () {
     					'v': state.c
     				};
     				
-    				// result.push( obj );
-    				
+    				// safe the new state as current state for next switch
     				state = data[i];
+    				
+    				// adds 1 or 0 to the result string depending on the length of the current value is  
+    				// submitted. If frequency is 2Hz, means 2 blinks per second, each state is 500ms long
+    				// if the current value is detected for 1500ms it means three bits of the same value
+    				// were transmitted
     				returnStr = returnStr + _fillAddValue( '', Math.round( obj.d / tD ), obj.v=='b'?'0':'1' );
     			}
     			
@@ -693,9 +747,11 @@ var lightcom = (function () {
     		return returnStr;
     	}
     	
-    	// 
+    	
+    	// init external library at the beginning of all scripts 
     	_initLibrary();
  
+		// all public methods 
     	return{
     		
 			/**
