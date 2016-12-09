@@ -8,11 +8,15 @@
 	</head>
 
 	<body>
+		<h1>Receive data</h1>
+		
 		<script src="../src/lightcom.js"></script>
 		<script>
 			
 			window.onload = function(){
-				lightcom.receiveData( function(data){ console.info('Result data: ', data); });
+				lightcom.receiveData( function(data){ 
+					console.info('Result data: ', data); 
+				});
 			};
 			
 		</script>
